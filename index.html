@@ -1,10 +1,13 @@
 <!DOCTYPE html>
 <html>
 <head>
+  <link rel="stylesheet" href="css/my.css">
   <title>Load a file</title>
 </head>
 <body>
-  <input type="file" id="fileinput" multiple="multiple" />
+  <input type="file" id="files" name="file" />
+  <button onclick="abortRead();">Cancel read</button>
+  <div id="progress_bar"><div class="percent">0%</div></div>
   <script language="javascript" type="text/javascript" src="js/my.js"></script>
 </body>
 </html>
