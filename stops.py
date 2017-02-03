@@ -9,7 +9,8 @@ from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
 from sklearn import preprocessing
 from geojsonio import display
-from geojson import dumps,  Feature, Point, FeatureCollection, LineString
+from geojson import dumps, Feature, Point, FeatureCollection, LineString
+
 
 def cluster_by_k_means(frame, k=100):
     # Mean Normalize features
@@ -18,7 +19,7 @@ def cluster_by_k_means(frame, k=100):
     feature_columns = scaler.transform(frame[['x', 'y', 'altitude', 'time']])
 
     # Cluster
-    print("Clustering (k=", k, ") ...", file=sys.stderr, end="", flush=True)
+    print("Clustering k=", k, ") ...", file=sys.stderr, end="", flush=True)
     kmeans_model = KMeans(n_clusters=k, random_state=1)
     kmeans_model.fit(feature_columns)
     labels = kmeans_model.labels_
@@ -36,6 +37,7 @@ def cluster_by_interpoint_distance(frame, max_d=50, min_time=60, min_pts=3):
     # If so, and other minimum conditions are met, label it as Stopped
     while (i < len(frame.index) - 1):
         t0 = frame.iloc[i]['time']
+        dt0 = frame.index[i].strftime('%d %b %Y %H:%M CUT')
         lat0 = frame.iloc[i]['latitude']
         lon0 = frame.iloc[i]['longitude']
         x0 = frame.iloc[i]['x']
@@ -68,10 +70,12 @@ def cluster_by_interpoint_distance(frame, max_d=50, min_time=60, min_pts=3):
                 x = frame.iloc[i0:i - 1]['x'].mean()
                 y = frame.iloc[i0:i - 1]['y'].mean()
 
-                stops.append({'x': x, 'y': y, 'duration': duration})
+                stops.append(
+                    {'x': x, 'y': y, 'duration': duration, 'time': dt0})
             else:                               # from Started to Stopped
                 # start capturing duration and stats
                 t0 = row['time']
+                dt0 = frame.index[i].strftime('%d %b %Y %H:%M CUT')
                 i0 = i
             prev = row['stopped']
 
@@ -80,7 +84,7 @@ def cluster_by_interpoint_distance(frame, max_d=50, min_time=60, min_pts=3):
         duration = (frame.iloc[i - 1]['time'] - frame.iloc[i0]['time'])
         x = frame.iloc[i0:i - 1]['x'].mean()
         y = frame.iloc[i0:i - 1]['y'].mean()
-        stops.append({'x': x, 'y': y, 'duration': duration})
+        stops.append({'x': x, 'y': y, 'duration': duration, 'time': dt0})
 
     print("# stops:", len(stops), file=sys.stderr, end="\n", flush=True)
     return frame, stops
@@ -166,7 +170,7 @@ print("OK\n", file=sys.stderr, end="", flush=True)
 
 stops = {}
 color = {'raw': '#ff0000', 'resampled': '#00ff00'}
-x_offset = {'raw': 0, 'resampled': 100}
+x_offset = {'raw': 0, 'resampled': 0}
 original, stops['raw'] = cluster_by_interpoint_distance(
     original, max_d, min_time, min_pts)
 frame, stops['resampled'] = cluster_by_interpoint_distance(
@@ -210,11 +214,15 @@ gjs['resampled'] = []
 
 # original data points line
 gjs['raw'].append(
-    LineString(
-        [tuple(x) for x in original[['longitude', 'latitude']].values]))
-gjs['resampled'].append(
-    LineString(
-        [tuple(x) for x in original[['longitude', 'latitude']].values]))
+    Feature(
+        geometry=LineString(
+            [tuple(x) for x in frame[['longitude', 'latitude']].values]
+        )
+    )
+)
+# gjs['resampled'].append(
+#     LineString(
+#         [tuple(x) for x in original[['longitude', 'latitude']].values]))
 
 # original/resampled points, labelled o - moving or x - stopped
 # gjs['raw'] = geojson_points_from_frame(
@@ -223,24 +231,73 @@ gjs['resampled'].append(
 #     gjs['resampled'], frame, color['resampled'])
 
 
-# detected stops
+# we used this logic to present all potential stops for human assessment
+counter = 1
+
 for categ in ('raw', 'resampled'):
     print(categ)
     print("Number of stops:", len(stops[categ]), file=sys.stderr)
     print("Total duration of stops (hr):",
           sum(s['duration'] for s in stops[categ]) / 3600, file=sys.stderr)
     for s in stops[categ]:
-        lon, lat = proj(s['x']+x_offset[categ], s['y'], inverse=True)
+        lon, lat = proj(s['x'] + x_offset[categ], s['y'], inverse=True)
         lon = round(lon, 5)
         lat = round(lat, 5)
-        gjs[categ].append(
+        gjs['raw'].append(
             Feature(geometry=Point((lon, lat)),
                 properties={
                     "duration": int(round(s['duration'] / 60, 0)),
-                    "marker-color": color[categ]
+                    "marker-color": color[categ],
+                    "id": counter
                 }
             )
         )
-    display(dumps(FeatureCollection(gjs[categ])), force_gist=True)
+        s['id'] = counter
+        s['lon'] = lon
+        s['lat'] = lat
+        counter = counter + 1
+# print(dumps(FeatureCollection(gjs[categ])))
+# display(dumps(FeatureCollection(gjs['raw'])), force_gist=True)
 
+# These are the stops that were human-validated from above.
+# Create a data set that has the locations and durations of validated stops
+validated_stops = (1, 4, 5, 6, 7, 8, 9, 10, 12, 17, 18, 19, 21, 22, 23, 25,
+                   26, 29, 30, 32, 33, 36, 37, 38, 40, 42, 44, 45, 46, 47,
+                   51, 52, 54, 55, 58, 62, 64, 65, 67, 68, 70, 71, 72, 74,
+                   76, 77, 78, 79, 82, 83, 85, 87, 88, 89, 90, 92, 99, 100,
+                   101, 102, 103, 104, 106, 108, 110, 112, 117, 123, 126,
+                   128, 130, 131, 132, 133, 135, 136, 138, 140, 142, 143,
+                   145, 149, 150, 151, 153, 154, 158, 159, 160, 161, 163,
+                   164, 167, 168, 174, 177, 179, 180, 183, 185, 186, 188,
+                   192, 198, 203, 204, 206, 207, 211, 214, 215, 217, 219,
+                   221, 222, 223, 225, 226, 227, 228, 229, 231, 233, 234,
+                   236, 237, 239, 240, 243, 244, 245, 246, 248, 251, 254,
+                   257, 258, 259, 260, 266, 267, 268, 270, 271, 272, 273,
+                   275, 276, 277, 280, 282, 284, 285, 286, 288, 289, 290,
+                   293, 294, 298, 299, 302, 303, 304, 305, 308, 310, 311,
+                   313, 315, 318, 320, 321, 324, 326, 327, 328, 329, 333,
+                   334, 335, 337, 343, 349, 350, 352, 363, 364, 365, 366,
+                   367, 368, 369, 370, 376, 378, 379, 380, 381, 383, 384,
+                   385, 386, 387, 388, 389, 390, 392, 393, 395, 396, 397,
+                   400, 401, 402, 404, 406, 409, 411, 414, 418, 419, 421,
+                   422, 423, 425, 427, 429, 430, 431, 433, 434, 435, 436,
+                   437, 438, 439, 441, 442, 444, 445, 446, 450, 451, 453,
+                   454, 458, 459, 460, 461, 462, 463, 467, 468, 471, 473,
+                   475, 476, 480, 481, 482, 483, 484, 487, 545, 546, 628,
+                   630, 638, 968)
+gjs_stops = []
+for categ in ('raw', 'resampled'):
+    for s in stops[categ]:
+        if s['id'] in validated_stops:
+            gjs_stops.append(Feature(geometry=Point((s['lon'], s['lat'])),
+                properties={
+                    "point-type": "validated-stop",
+                    "time": s['time'],
+                    "duration": int(round(s['duration'] / 60, 0)),
+                    "marker-color": '#ff0000',
+                    "id": s['id']
+                }))
+display(dumps(FeatureCollection(gjs_stops)), force_gist=True)
+with open('validated-stops.geojson', 'w') as outfile:
+    dumps(FeatureCollection(gjs_stops), outfile)
 
