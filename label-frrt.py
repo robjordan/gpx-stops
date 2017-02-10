@@ -2,10 +2,12 @@
 import numpy as np
 import pandas as pd
 import pyproj
+from pyproj import Geod
 import gpxpy
 import matplotlib.pyplot as plt
 import sys
 import math
+import json
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
 from sklearn import preprocessing
@@ -286,43 +288,111 @@ stop_coords = [(3.86754, 50.64401),
 proximity = 75 ** 2
 
 
-def speed(x1, y1, t1, x2, y2, t2):
-    return math.sqrt((x2-x1)**2 + (y2-y1)**2) / float((t2-t1).total_seconds())
+def distance(x1, y1, x2, y2):
+    return math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2)
 
 
-def direction(x1, y1, x2, y2):
+def speed_xy(x1, y1, t1, x2, y2, t2):
+    return distance(x1, y1, x2, y2) / float((t2 - t1).total_seconds())
+
+
+def speed_ll(geod, lat1, lon1, t1, lat2, lon2, t2):
+    az12, az21, dist = geod.inv(lon1, lat1, lon2, lat2)
+    return dist / float((t2 - t1).total_seconds())
+
+
+def direction_xy(x1, y1, x2, y2):
     return math.atan2((y2 - y1), (x2 - x1))
 
 
-## MAIN ##
-infile = str(sys.argv[1])
+def load_gpx_to_frame(file):
+    gpx = gpxpy.parse(open(file))
+    seg_dict = {}
+    for track in gpx.tracks:
+        for segment in track.segments:
+            for point in segment.points:
+                x, y = proj(point.longitude, point.latitude)
+                stopped = False
+                seg_dict[point.time] = [
+                    x, y,
+                    point.latitude, point.longitude, point.elevation, 0]
+    frame = pd.DataFrame(data=seg_dict)
+    # Switch columns and rows s.t. timestamps are rows and gps data columns.
+    frame = frame.T
+    frame.columns = ['x', 'y', 'latitude', 'longitude', 'altitude', 'stopped']
+    return frame
 
-gpx = gpxpy.parse(open(infile))
-seg_dict = {}
+
+def xy_rte_pos_at_time_t(rte, t):
+    idx = np.searchsorted(rte.index.values, np.datetime64(t))
+    if t == rte.index[idx]:
+        # perfect match; just return the x and y value
+        x = rte.iloc[idx]['x']
+        y = rte.iloc[idx]['y']
+    else:
+        # we need to interpolate
+        dt = np.datetime64(t).astype('uint64') // 1E6
+
+        t2 = np.datetime64(rte.index[idx]).astype('uint64') // 1E6
+        x2 = rte.iloc[idx]['x']
+        y2 = rte.iloc[idx]['y']
+
+        t1 = np.datetime64(rte.index[idx - 1]).astype('uint64') // 1E6
+        x1 = rte.iloc[idx - 1]['x']
+        y1 = rte.iloc[idx - 1]['y']
+
+        x = x1 + (dt - t1) / (t2 - t1) * (x2 - x1)
+        y = y1 + (dt - t1) / (t2 - t1) * (y2 - y1)
+    return idx, x, y
+
+
+def rte_distance_and_speed(rte, t1, t2):
+    d = 0.0
+    idx1, x1, y1 = xy_rte_pos_at_time_t(rte, t1)
+    idx2, x2, y2 = xy_rte_pos_at_time_t(rte, t2)
+    # first the bit from x1, y1 to x, y @ idx1
+    d = d + distance(x1, y1, rte.iloc[idx1]['x'], rte.iloc[idx1]['y'])
+    # then all the hops from idx1 to (idx2-1)
+    for i in range(idx1, idx2 - 1):
+        d = d + distance(
+            rte.iloc[i]['x'],
+            rte.iloc[i]['y'],
+            rte.iloc[i + 1]['x'],
+            rte.iloc[i + 1]['y'])
+    # finally the bit from (idx2-1) to x2, y2
+    d = d + distance(rte.iloc[idx2 - 1]['x'], rte.iloc[idx2 - 1]['y'], x2, y2)
+
+    t1 = np.datetime64(t1).astype('uint64')
+    t2 = np.datetime64(t2).astype('uint64')
+    speed = d / ((t2 - t1) // 1E6)
+    return d, speed
+
+## MAIN ##
+
+
 # TCR spans from Zone 31 to Zone 35. 33 is median. Hope it works!
 proj = pyproj.Proj(proj='utm', zone=33, ellps='WGS84')
+wgs84 = Geod(ellps='WGS84')
 
 # Load the GPX file points into a Pandas data frame
-print("Loading GPX file...", file=sys.stderr, end="", flush=True)
-for track in gpx.tracks:
-    for segment in track.segments:
-        for point in segment.points:
-            x, y = proj(point.longitude, point.latitude)
-            stopped = False
-            seg_dict[point.time] = [
-                x, y,
-                point.latitude, point.longitude, point.elevation, 0]
+print("Loading GPX track file...", file=sys.stderr, end="", flush=True)
+trk_file = str(sys.argv[1])
+frame = load_gpx_to_frame(trk_file)
+print("OK\n", file=sys.stderr, end="", flush=True)
+print("Loading GPX route file...", file=sys.stderr, end="", flush=True)
+rte_file = str(sys.argv[2])
+rte_frame = load_gpx_to_frame(rte_file)
 print("OK\n", file=sys.stderr, end="", flush=True)
 
-print("Converting to DataFrame...", file=sys.stderr, end="", flush=True)
-frame = pd.DataFrame(data=seg_dict)
-# Switch columns and rows s.t. timestamps are rows and gps data columns.
-frame = frame.T
+
 frame.columns = ['x', 'y', 'latitude', 'longitude', 'altitude', 'stopped']
 frame['time'] = frame.index
 frame['speed_prev'] = 0.0
+frame['rte_speed_prev'] = 0.0
 frame['dir_prev'] = 0.0
 frame['speed_next'] = 0.0
+frame['rte_speed_next'] = 0.0
+frame['rte_dist_next'] = 0.0
 frame['dir_next'] = 0.0
 frame = frame.reset_index(drop=True)
 print("OK\n", file=sys.stderr, end="", flush=True)
@@ -350,31 +420,52 @@ for i in range(0, len(frame.index)):
         frame.set_value(
             frame.index[i],
             'speed_prev',
-            speed(prev['x'], prev['y'], prev['time'], x1, y1, t))
+            speed_xy(prev['x'], prev['y'], prev['time'], x1, y1, t))
         frame.set_value(
             frame.index[i],
             'dir_prev',
-            direction(prev['x'], prev['y'], x1, y1))
+            direction_xy(prev['x'], prev['y'], x1, y1))
+        dist, speed = rte_distance_and_speed(rte_frame, prev['time'], t)
+        frame.set_value(
+            frame.index[i],
+            'rte_speed_prev',
+            speed)
     if i < len(frame.index) - 1:
         next = frame.iloc[i + 1]
         frame.set_value(
             frame.index[i],
             'speed_next',
-            speed(x1, y1, t, next['x'], next['y'], next['time']))
+            speed_xy(x1, y1, t, next['x'], next['y'], next['time']))
         frame.set_value(
             frame.index[i],
             'dir_next',
-            direction(x1, y1, next['x'], next['y']))
+            direction_xy(x1, y1, next['x'], next['y']))
+        dist, speed = rte_distance_and_speed(rte_frame, t, next['time'])
+        frame.set_value(
+            frame.index[i],
+            'rte_speed_next',
+            speed)
+        frame.set_value(
+            frame.index[i],
+            'rte_dist_next',
+            dist)
+# Write the features and labels to a CSV file for later classification work
+frame.to_csv(trk_file + ".csv")
 
 # Visualise
 gjs = []
 for sx, sy in stops:
-    gjs.append(Feature(geometry=Polygon([[
-        proj(sx - 75, sy, inverse=True),
-        proj(sx, sy + 75, inverse=True),
-        proj(sx + 75, sy, inverse=True),
-        proj(sx, sy - 75, inverse=True)]]
-    )))
+    gjs.append(Feature(
+        geometry=Polygon([[
+            proj(sx - 75, sy, inverse=True),
+            proj(sx, sy + 75, inverse=True),
+            proj(sx + 75, sy, inverse=True),
+            proj(sx, sy - 75, inverse=True)]]
+        ),
+        properties={"fill": '#ff0000'}
+    ))
+with open('validated-stop-polygons.geojson', 'w') as outfile:
+    json.dump(FeatureCollection(gjs), outfile)
 for i in range(0, len(frame.index)):
     row = frame.iloc[i]
     if (row['stopped']):

@@ -5,6 +5,7 @@ import pyproj
 import gpxpy
 import matplotlib.pyplot as plt
 import sys
+import json
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
 from sklearn import preprocessing
@@ -299,5 +300,5 @@ for categ in ('raw', 'resampled'):
                 }))
 display(dumps(FeatureCollection(gjs_stops)), force_gist=True)
 with open('validated-stops.geojson', 'w') as outfile:
-    dumps(FeatureCollection(gjs_stops), outfile)
+    json.dump(FeatureCollection(gjs_stops), outfile)
 
