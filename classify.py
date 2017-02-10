@@ -29,8 +29,10 @@ interval = statistics.median([
 ])
 
 
-columns = ["speed_prev", "rte_speed_prev", "dir_prev",
-           "speed_next", "rte_speed_next", "dir_next"]
+# columns = ["speed_prev", "rte_speed_prev", "dir_prev",
+#            "speed_next", "rte_speed_next", "dir_next"]
+columns = ["speed_prev", "dir_prev",
+           "speed_next", "dir_next"]
 labels = dataset['stopped'].values
 features = dataset[list(columns)].values
 

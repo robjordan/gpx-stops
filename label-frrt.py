@@ -119,7 +119,6 @@ stop_coords = [(3.86754, 50.64401),
      (12.03519, 46.44987),
      (12.03599, 46.47514),
      (12.05338, 46.48263),
-     (12.03157, 46.45658),
      (12.05977, 46.44555),
      (12.10274, 46.39302),
      (12.2493, 46.2757),
@@ -278,12 +277,14 @@ stop_coords = [(3.86754, 50.64401),
      (26.77076, 40.70795),
      (26.82689, 40.65463),
      (26.64406, 40.40653),
-     (4.27601, 46.43415),
-     (4.27557, 46.43467),
+     (4.27475, 46.434),
+     (4.27421, 46.43447),
      (8.56794, 46.61792),
-     (8.59769, 46.63505),
-     (8.67247, 46.65944),
-     (24.33023, 40.98429)]
+     (8.59617, 46.63498),
+     (8.67119, 46.65966),
+     (24.33023, 40.98429),
+     (12.0348,46.4514),
+     (14.80375, 45.12373)]
 
 proximity = 75 ** 2
 
@@ -325,31 +326,13 @@ def load_gpx_to_frame(file):
 
 def xy_rte_pos_at_time_t(rte, t):
     idx = np.searchsorted(rte.index.values, np.datetime64(t))
-    if t == rte.index[idx]:
-        # perfect match; just return the x and y value
-        x = rte.iloc[idx]['x']
-        y = rte.iloc[idx]['y']
-    else:
-        # we need to interpolate
-        dt = np.datetime64(t).astype('uint64') // 1E6
-
-        t2 = np.datetime64(rte.index[idx]).astype('uint64') // 1E6
-        x2 = rte.iloc[idx]['x']
-        y2 = rte.iloc[idx]['y']
-
-        t1 = np.datetime64(rte.index[idx - 1]).astype('uint64') // 1E6
-        x1 = rte.iloc[idx - 1]['x']
-        y1 = rte.iloc[idx - 1]['y']
-
-        x = x1 + (dt - t1) / (t2 - t1) * (x2 - x1)
-        y = y1 + (dt - t1) / (t2 - t1) * (y2 - y1)
-    return idx, x, y
+    return idx
 
 
-def rte_distance_and_speed(rte, t1, t2):
+def rte_distance_and_speed(rte, x1, y1, t1, x2, y2, t2):
     d = 0.0
-    idx1, x1, y1 = xy_rte_pos_at_time_t(rte, t1)
-    idx2, x2, y2 = xy_rte_pos_at_time_t(rte, t2)
+    idx1 = xy_rte_pos_at_time_t(rte, t1)
+    idx2 = xy_rte_pos_at_time_t(rte, t2)
     # first the bit from x1, y1 to x, y @ idx1
     d = d + distance(x1, y1, rte.iloc[idx1]['x'], rte.iloc[idx1]['y'])
     # then all the hops from idx1 to (idx2-1)
@@ -425,7 +408,14 @@ for i in range(0, len(frame.index)):
             frame.index[i],
             'dir_prev',
             direction_xy(prev['x'], prev['y'], x1, y1))
-        dist, speed = rte_distance_and_speed(rte_frame, prev['time'], t)
+        dist, speed = rte_distance_and_speed(
+            rte_frame,
+            prev['x'],
+            prev['y'],
+            prev['time'],
+            x1,
+            y1,
+            t)
         frame.set_value(
             frame.index[i],
             'rte_speed_prev',
@@ -440,7 +430,14 @@ for i in range(0, len(frame.index)):
             frame.index[i],
             'dir_next',
             direction_xy(x1, y1, next['x'], next['y']))
-        dist, speed = rte_distance_and_speed(rte_frame, t, next['time'])
+        dist, speed = rte_distance_and_speed(
+            rte_frame,
+            x1,
+            y1,
+            t,
+            next['x'],
+            next['y'],
+            next['time'])
         frame.set_value(
             frame.index[i],
             'rte_speed_next',
